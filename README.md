@@ -61,6 +61,7 @@ npm run dev
 | 时序窗口 | `time_window` | 窗口定义 | 窗口编号、窗口类型、滑动宽度 |
 | 数据切片 | `dataset_slice` | 切片配置 | 切片编号、源立方、维度过筛 |
 | 下钻配置 | `drill_config` | 下钻路径 | 路径编号、起始维度、目标维度 |
+| 下钻分析 | `drill_analysis` | 授权范围内下钻明细 | 取数账号、下钻路径、范围标识 |
 | 结果集市 | `result_mart` | 数据Mart | 集市编号、集市名称、数据来源 |
 | 基准集 | `benchmark_set` | 分析基线 | 基线编号、基线名称、数据范围 |
 | 查询审计 | `query_audit` | 审计记录 | 记录编号、查询语句、执行耗时 |
@@ -81,5 +82,46 @@ npm run dev
 - 列表接口统一返回 `{ items, total, page, size }`，动作接口统一返回 `{ ok, message }`。
 - 状态流转只允许在 `app/services` 里改，路由层不做业务判断。
 
+## 授权范围下钻
+
+下钻取数不再停留在配置展示：`drill_config` 的层级归属会解析成可执行步骤，
+下钻明细、直接查询和下载三条读取路径共用 `app/services/drill_analysis.py`
+的同一套逻辑——先按账号授权过滤立方事实明细，再重新聚合。
+
+- 账号与可见地区 / 城市由 `app/services/access_scope.py` 管理；
+  `analyst_east_west` 为核对账号：东区全部、西区仅成都可见。
+- 存在受限子节点的父级不输出全量小计（`subtotal=null`）；若此前看过完整
+  小计、随后授权被临时收回，则连部分小计也一并压下（`withheld=true`），
+  避免用新旧总量相减反推受限金额。
+- 每次读取都带 `scope_version` 范围标识；页面与下载必须使用同一版本，
+  版本不符返回 409。共享页面按当前读者的地区范围重新取数，只读。
+- 聚合组结果回写到 `drill_manifest`（运行时表，不计入业务模块概览）。
+
+| 接口 | 说明 |
+| --- | --- |
+| `GET /api/drill/accounts` | 可切换账号及其范围（不含金额） |
+| `GET /api/drill/scope?account=` | 账号可见地区 / 城市、范围标识、权限版本 |
+| `GET /api/drill/detail?account=&cube_id=&path=全国>西区&scope_version=` | 下钻明细 |
+| `GET /api/drill/direct?account=&cube_id=&group_by=&region=` | 直接查询 |
+| `GET /api/drill/export?account=&cube_id=&path=&scope_version=` | 下载（与页面同版本） |
+| `GET /api/drill/manifest?account=&cube_id=` | 下钻清单（旧版本金额剥离） |
+| `GET /api/drill/shared?reader=` / `GET /api/drill/shared/{id}?reader=` | 共享页清单 / 只读取数 |
+| `POST /api/drill/scopes/revoke` / `POST /api/drill/scopes/restore` | 临时收权 / 恢复 |
+
+前端入口：`/drill_analysis`（下钻分析）。
+
+核对方式：用 `analyst_east_west` 分别调用下钻、直查和下载，西区响应中只有
+成都（900 / 25），不出现重庆、西安的金额，全国父级也不展示全量小计。
+
 领域：数据工程
 子方向：数据分析与数据应用
+
+## 本地下钻验收
+
+```bash
+cd backend && .venv/bin/python -m pytest tests/test_drill_scope.py -q
+```
+
+覆盖：东区全量 / 西区成都账号的下钻、直查、下载口径一致；父级受限子节点
+不展示全量小计；临时收回后旧权限版本 409、历史完整小计压下；共享页按读者
+范围重新取数。

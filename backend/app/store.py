@@ -8,6 +8,9 @@ from typing import Any
 
 from app.seed import SEED_ROWS
 
+# 运行时产物表，只在专项接口中暴露，不进入运营概览的业务模块统计。
+INTERNAL_MODULES = {"drill_manifest"}
+
 
 class Store:
     def __init__(self) -> None:
@@ -17,6 +20,9 @@ class Store:
 
     def module_names(self) -> list[str]:
         return sorted(self._tables)
+
+    def business_module_names(self) -> list[str]:
+        return sorted(name for name in self._tables if name not in INTERNAL_MODULES)
 
     def rows(self, module: str) -> list[dict[str, Any]]:
         return self._tables.setdefault(module, [])
@@ -29,7 +35,7 @@ class Store:
 
     def overview(self) -> dict[str, object]:
         modules: list[dict[str, object]] = []
-        for name in self.module_names():
+        for name in self.business_module_names():
             rows = self.rows(name)
             modules.append({
                 "name": name,
